@@ -7,7 +7,6 @@
 ### 🔗 Kết nối P2P
 - **Mô hình P2P thuần túy**: Mỗi node vừa có thể lắng nghe (server) vừa có thể kết nối (client)
 - **Không cần server trung tâm**: Kết nối trực tiếp giữa các peer
-- **Đa kết nối**: Một node có thể kết nối với nhiều peer cùng lúc
 - **Tự động phát hiện peer**: Tìm kiếm các peer khác trong mạng LAN qua UDP broadcast
 
 ### 💬 Chat trực tiếp
@@ -42,7 +41,7 @@ P2PChatApp/
 
 ### 1. Khởi động ứng dụng
 ```bash
-cd "C:\Users\84355\source\repos\P2PChat1\P2PChatApp"
+cd "C:\Users\84355\source\repos\P2PChat\P2PChatApp"
 dotnet run
 ```
 
@@ -67,12 +66,6 @@ dotnet run
 - Mở tab **"Chat"**
 - Nhập tin nhắn và nhấn Enter hoặc click **"Gửi"**
 
-### 6. Chia sẻ File
-- Mở tab **"Truyền File"**
-- Click **"Chọn File"** để chọn file cần gửi
-- Click **"Gửi File"** để bắt đầu truyền
-- Theo dõi tiến độ trên progress bar
-
 ## Yêu cầu hệ thống
 
 - **.NET 8.0** hoặc cao hơn
@@ -96,34 +89,6 @@ dotnet run
 - **RichTextBox**: Hiển thị chat với màu sắc
 - **ProgressBar**: Hiển thị tiến độ file transfer
 
-## Kiến thức lập trình mạng được áp dụng
-
-### ✅ Đã implement
-1. **TCP Socket Programming**
-   - TcpClient và TcpListener
-   - NetworkStream cho gửi/nhận dữ liệu
-   - Async/await cho non-blocking operations
-
-2. **UDP Broadcasting**
-   - UdpClient với EnableBroadcast
-   - Broadcast discovery trong LAN
-   - Timeout handling
-
-3. **File Transfer Protocol**
-   - Custom protocol với header và end marker
-   - Chunk-based transfer với progress tracking
-   - Error handling và recovery
-
-4. **Threading & Concurrency**
-   - Background tasks cho listening
-   - UI thread safety với Invoke
-   - CancellationToken cho graceful shutdown
-
-5. **Error Handling**
-   - Try-catch cho network operations
-   - Connection state management
-   - User-friendly error messages
-
 ### 🔧 Có thể mở rộng
 - **Encryption**: Mã hóa tin nhắn và file
 - **Authentication**: Xác thực người dùng  
@@ -131,38 +96,3 @@ dotnet run
 - **NAT Traversal**: Kết nối qua internet (hiện tại chỉ hoạt động trong LAN)
 - **Message Persistence**: Lưu trữ tin nhắn
 - **File Compression**: Nén file trước khi gửi
-
-## Troubleshooting
-
-### Không tìm thấy peer
-- Đảm bảo cả hai máy trong cùng mạng LAN
-- Kiểm tra firewall settings
-- Thử restart discovery
-
-### Kết nối thất bại
-- Kiểm tra IP và cổng
-- Đảm bảo peer đang lắng nghe
-- Kiểm tra firewall
-
-### File transfer lỗi
-- Kiểm tra kết nối còn hoạt động
-- Đảm bảo có đủ dung lượng ổ cứng
-- Thử với file nhỏ trước
-
-## Phát triển thêm
-
-Dự án này có thể được mở rộng với:
-- Voice/Video chat
-- Screen sharing
-- Group chat
-- Message encryption
-- File compression
-- NAT traversal
-- Web interface
-
-## License
-
-Dự án này được phát triển cho mục đích học tập và nghiên cứu.
-
-
-
