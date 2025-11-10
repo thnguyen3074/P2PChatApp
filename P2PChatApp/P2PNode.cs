@@ -1,5 +1,4 @@
 ﻿using System;
-using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -15,9 +14,6 @@ namespace P2PChatApp
         private NetworkStream? _stream;
         private readonly int _port;
         private CancellationTokenSource? _cts;
-        private bool _disconnected = false;
-
-        private ConnectionMonitor? _monitor;
 
         public event Action<string, string>? MessageReceived;
         public event Action<string, byte[]>? FileReceived;
@@ -28,6 +24,9 @@ namespace P2PChatApp
         public bool IsConnected => _client?.Connected ?? false;
 
         public PeerNode(int port) => _port = port;
+        string Escape(string s) => s.Replace("\\", "\\\\").Replace("|", "\\|").Replace("\n", "\\n");
+        string Unescape(string s) => s.Replace("\\n", "\n").Replace("\\|", "|").Replace("\\\\", "\\");
+
 
         public async Task StartListeningAsync()
         {
@@ -85,9 +84,6 @@ namespace P2PChatApp
             _stream = client.GetStream();
 
             _ = Task.Run(async () => await ReceiveLoop());
-
-            _monitor = new ConnectionMonitor(_client, _stream, Disconnect, OnError);
-            _monitor.Start();
         }
 
         private async Task ReceiveLoop()
@@ -100,9 +96,6 @@ namespace P2PChatApp
                 {
                     string? line = await reader.ReadLineAsync();
                     if (string.IsNullOrEmpty(line)) break;
-
-                    _monitor?.UpdateHeartbeat(); 
-                    if (line == "PING") continue;
 
                     ProcessMessage(line);
                 }
@@ -125,16 +118,22 @@ namespace P2PChatApp
                 if (parts.Length < 2) return;
 
                 string type = parts[0];
+
                 switch (type)
                 {
                     case "MSG":
                         if (parts.Length >= 3)
-                            MessageReceived?.Invoke(parts[1], parts[2]);
+                        {
+                            string username = Unescape(parts[1]);
+                            string message = Unescape(parts[2]);
+                            MessageReceived?.Invoke(username, message);
+                        }
                         break;
+
                     case "FILE":
                         if (parts.Length >= 3)
                         {
-                            string filename = parts[1];
+                            string filename = Unescape(parts[1]);
                             byte[] fileData = Convert.FromBase64String(parts[2]);
                             FileReceived?.Invoke(filename, fileData);
                         }
@@ -154,8 +153,9 @@ namespace P2PChatApp
 
             try
             {
-                string packet = $"MSG|{username}|{message}\n";
+                string packet = $"MSG|{Escape(username)}|{Escape(message)}\n";
                 byte[] data = Encoding.UTF8.GetBytes(packet);
+
                 await _stream.WriteAsync(data, 0, data.Length);
                 await _stream.FlushAsync();
             }
@@ -167,17 +167,23 @@ namespace P2PChatApp
             }
         }
 
-
         public async Task SendFileAsync(string fileName, byte[] fileData)
         {
             if (_stream == null || !IsConnected)
                 throw new InvalidOperationException("Chưa kết nối");
+            const long MAX_FILE_SIZE = 10 * 1024 * 1024;
+            if (fileData.Length > 10 * 1024 * 1024)
+            {
+                OnError?.Invoke("Kích thước file vượt quá 10MB, vui lòng chọn file nhỏ hơn.");
+                return;
+            }
 
             try
             {
                 string base64Data = Convert.ToBase64String(fileData);
-                string packet = $"FILE|{fileName}|{base64Data}\n";
+                string packet = $"FILE|{Escape(fileName)}|{base64Data}\n";
                 byte[] data = Encoding.UTF8.GetBytes(packet);
+
                 await _stream.WriteAsync(data, 0, data.Length);
                 await _stream.FlushAsync();
             }
@@ -189,14 +195,8 @@ namespace P2PChatApp
             }
         }
 
-
         public void Disconnect()
         {
-            if (_disconnected) return;
-            _disconnected = true;
-
-            _monitor?.Stop();
-
             try
             {
                 _stream?.Close();
@@ -209,7 +209,6 @@ namespace P2PChatApp
         public void Stop()
         {
             _cts?.Cancel();
-            Disconnect();
             _listener?.Stop();
         }
     }

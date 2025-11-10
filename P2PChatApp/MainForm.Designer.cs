@@ -190,7 +190,7 @@ namespace P2PChatApp
             btnDisconnect.Enabled = false;
             btnDisconnect.Location = new Point(200, 80);
             btnDisconnect.Name = "btnDisconnect";
-            btnDisconnect.Size = new Size(75, 23);
+            btnDisconnect.Size = new Size(82, 23);
             btnDisconnect.TabIndex = 5;
             btnDisconnect.Text = "Ngắt kết nối";
             btnDisconnect.UseVisualStyleBackColor = true;
@@ -320,9 +320,9 @@ namespace P2PChatApp
             // btnAttachFile
             // 
             btnAttachFile.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            btnAttachFile.Location = new Point(584, 25);
+            btnAttachFile.Location = new Point(612, 25);
             btnAttachFile.Name = "btnAttachFile";
-            btnAttachFile.Size = new Size(110, 23);
+            btnAttachFile.Size = new Size(81, 23);
             btnAttachFile.TabIndex = 3;
             btnAttachFile.Text = "Gửi File";
             btnAttachFile.UseVisualStyleBackColor = true;
@@ -331,9 +331,9 @@ namespace P2PChatApp
             // btnSendMessage
             // 
             btnSendMessage.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            btnSendMessage.Location = new Point(700, 25);
+            btnSendMessage.Location = new Point(699, 25);
             btnSendMessage.Name = "btnSendMessage";
-            btnSendMessage.Size = new Size(75, 23);
+            btnSendMessage.Size = new Size(76, 23);
             btnSendMessage.TabIndex = 2;
             btnSendMessage.Text = "Gửi";
             btnSendMessage.UseVisualStyleBackColor = true;
@@ -344,7 +344,7 @@ namespace P2PChatApp
             txtMessage.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             txtMessage.Location = new Point(70, 25);
             txtMessage.Name = "txtMessage";
-            txtMessage.Size = new Size(508, 23);
+            txtMessage.Size = new Size(536, 23);
             txtMessage.TabIndex = 1;
             txtMessage.KeyPress += txtMessage_KeyPress;
             // 

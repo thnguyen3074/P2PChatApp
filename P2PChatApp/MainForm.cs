@@ -31,13 +31,21 @@ namespace P2PChatApp
         {
             try
             {
-                var host = Dns.GetHostEntry(Dns.GetHostName());
-                foreach (var ip in host.AddressList)
+                foreach (var ni in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
                 {
-                    if (ip.AddressFamily == AddressFamily.InterNetwork)
+                    if (ni.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up)
+                        continue;
+                    string name = ni.Name.ToLower();
+                    if (name.Contains("vmware") || name.Contains("virtual") || name.Contains("loopback"))
+                        continue;
+                    var ipProps = ni.GetIPProperties();
+                    foreach (var ip in ipProps.UnicastAddresses)
                     {
-                        txtLocalIP.Text = ip.ToString();
-                        return;
+                        if (ip.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                        {
+                            txtLocalIP.Text = ip.Address.ToString();
+                            return;
+                        }
                     }
                 }
                 txtLocalIP.Text = "127.0.0.1";
@@ -47,6 +55,7 @@ namespace P2PChatApp
                 txtLocalIP.Text = "127.0.0.1";
             }
         }
+
 
         private void btnStartServer_Click(object sender, EventArgs e)
         {
@@ -71,6 +80,12 @@ namespace P2PChatApp
                 _peerNode.OnConnected += endpoint => Invoke((Action)(() =>
                 {
                     UpdateStatus($"Đã kết nối với {endpoint}", Color.Green);
+                    MessageBox.Show(
+                        $"Đã kết nối thành công với {endpoint}",
+                        "Kết nối thành công",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information
+                    );
                     EnableChatControls(true);
                     btnConnect.Enabled = false;
                     btnDisconnect.Enabled = true;
@@ -80,16 +95,20 @@ namespace P2PChatApp
                 _peerNode.OnDisconnected += () => Invoke((Action)(() =>
                 {
                     UpdateStatus("Đã ngắt kết nối", Color.Orange);
+                    MessageBox.Show(
+                        "Kết nối đã bị ngắt!",
+                        "Ngắt kết nối",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning
+                    );
                     EnableChatControls(false);
                     btnConnect.Enabled = true;
                     btnDisconnect.Enabled = false;
                     txtUserName.Enabled = true;
                 }));
 
-                _peerNode.OnError += error => Invoke((Action)(() =>
-                {
-                    AppendChatMessage($"[Lỗi] {error}", Color.Red);
-                }));
+                _peerNode.OnError += message => Invoke((Action)(() => MessageBox.Show(message, "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error)));
+
 
                 Task.Run(async () => await _peerNode.StartListeningAsync());
 
@@ -130,6 +149,8 @@ namespace P2PChatApp
         {
             try
             {
+                btnStartServer_Click(null, null);
+
                 if (!IPAddress.TryParse(txtRemoteIP.Text, out IPAddress? ipAddress))
                 {
                     MessageBox.Show("Địa chỉ IP không hợp lệ", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
@@ -154,11 +175,24 @@ namespace P2PChatApp
                     MessageBox.Show("Không thể kết nối đến chính mình!", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }
-
+                btnConnect.Enabled = false;
                 var endPoint = new IPEndPoint(ipAddress, port);
                 UpdateStatus($"Đang kết nối đến {endPoint}...", Color.Orange);
+                var connectTask = _peerNode.ConnectToPeerAsync(endPoint);
+                var timeoutTask = Task.Delay(TimeSpan.FromSeconds(20));
 
-                await _peerNode.ConnectToPeerAsync(endPoint);
+                var completed = await Task.WhenAny(connectTask, timeoutTask);
+
+                if (completed == timeoutTask)
+                {
+                    MessageBox.Show("Kết nối thất bại: quá 20 giây mà không có phản hồi từ peer.",
+                                    "Timeout", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    UpdateStatus("Kết nối thất bại (timeout)", Color.Red);
+                    btnConnect.Enabled = true;
+                    return;
+                }
+                await connectTask;
+                UpdateStatus($"Đã kết nối đến {endPoint}", Color.Green);
 
                 btnConnect.Enabled = false;
                 btnDisconnect.Enabled = true;
@@ -429,7 +463,7 @@ namespace P2PChatApp
             {
                 _peerNode?.Stop();
                 _discoveryCts?.Cancel();
-                _peerDiscovery?.Dispose(); 
+                _peerDiscovery?.Dispose();
             }
             catch { }
             base.OnFormClosing(e);
