@@ -1,4 +1,5 @@
 ﻿using System;
+using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -14,6 +15,9 @@ namespace P2PChatApp
         private NetworkStream? _stream;
         private readonly int _port;
         private CancellationTokenSource? _cts;
+        private bool _disconnected = false;
+
+        private ConnectionMonitor? _monitor;
 
         public event Action<string, string>? MessageReceived;
         public event Action<string, byte[]>? FileReceived;
@@ -49,7 +53,7 @@ namespace P2PChatApp
                 {
                     var client = await _listener!.AcceptTcpClientAsync();
                     var endpoint = (IPEndPoint?)client.Client.RemoteEndPoint;
-                    
+
                     Attach(client);
                     OnConnected?.Invoke(endpoint!);
                 }
@@ -63,7 +67,7 @@ namespace P2PChatApp
             {
                 var client = new TcpClient();
                 await client.ConnectAsync(endPoint.Address, endPoint.Port);
-                
+
                 Attach(client);
                 OnConnected?.Invoke(endPoint);
             }
@@ -79,8 +83,11 @@ namespace P2PChatApp
             _client?.Close();
             _client = client;
             _stream = client.GetStream();
-            
+
             _ = Task.Run(async () => await ReceiveLoop());
+
+            _monitor = new ConnectionMonitor(_client, _stream, Disconnect, OnError);
+            _monitor.Start();
         }
 
         private async Task ReceiveLoop()
@@ -88,11 +95,14 @@ namespace P2PChatApp
             try
             {
                 using var reader = new StreamReader(_stream!, Encoding.UTF8, leaveOpen: true);
-                
+
                 while (_client?.Connected == true)
                 {
                     string? line = await reader.ReadLineAsync();
                     if (string.IsNullOrEmpty(line)) break;
+
+                    _monitor?.UpdateHeartbeat(); 
+                    if (line == "PING") continue;
 
                     ProcessMessage(line);
                 }
@@ -115,18 +125,12 @@ namespace P2PChatApp
                 if (parts.Length < 2) return;
 
                 string type = parts[0];
-
                 switch (type)
                 {
                     case "MSG":
                         if (parts.Length >= 3)
-                        {
-                            string username = parts[1];
-                            string message = parts[2];
-                            MessageReceived?.Invoke(username, message);
-                        }
+                            MessageReceived?.Invoke(parts[1], parts[2]);
                         break;
-
                     case "FILE":
                         if (parts.Length >= 3)
                         {
@@ -152,7 +156,6 @@ namespace P2PChatApp
             {
                 string packet = $"MSG|{username}|{message}\n";
                 byte[] data = Encoding.UTF8.GetBytes(packet);
-
                 await _stream.WriteAsync(data, 0, data.Length);
                 await _stream.FlushAsync();
             }
@@ -164,6 +167,7 @@ namespace P2PChatApp
             }
         }
 
+
         public async Task SendFileAsync(string fileName, byte[] fileData)
         {
             if (_stream == null || !IsConnected)
@@ -174,7 +178,6 @@ namespace P2PChatApp
                 string base64Data = Convert.ToBase64String(fileData);
                 string packet = $"FILE|{fileName}|{base64Data}\n";
                 byte[] data = Encoding.UTF8.GetBytes(packet);
-
                 await _stream.WriteAsync(data, 0, data.Length);
                 await _stream.FlushAsync();
             }
@@ -186,8 +189,14 @@ namespace P2PChatApp
             }
         }
 
+
         public void Disconnect()
         {
+            if (_disconnected) return;
+            _disconnected = true;
+
+            _monitor?.Stop();
+
             try
             {
                 _stream?.Close();
