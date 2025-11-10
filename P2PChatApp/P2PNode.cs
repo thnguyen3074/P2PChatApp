@@ -20,22 +20,25 @@ namespace P2PChatApp
         public event Action<IPEndPoint>? OnConnected;
         public event Action? OnDisconnected;
         public event Action<string>? OnError;
-
+        private bool _isListening = false;
+        public bool IsListening => _isListening;
         public bool IsConnected => _client?.Connected ?? false;
 
         public PeerNode(int port) => _port = port;
+        public PeerNode(){}
         string Escape(string s) => s.Replace("\\", "\\\\").Replace("|", "\\|").Replace("\n", "\\n");
         string Unescape(string s) => s.Replace("\\n", "\n").Replace("\\|", "|").Replace("\\\\", "\\");
 
 
         public async Task StartListeningAsync()
         {
+            if (_isListening) return;
             try
             {
                 _cts = new CancellationTokenSource();
                 _listener = new TcpListener(IPAddress.Any, _port);
                 _listener.Start();
-
+                _isListening = true;
                 _ = Task.Run(async () => await AcceptLoop(_cts.Token));
             }
             catch (Exception ex)
@@ -172,7 +175,7 @@ namespace P2PChatApp
             if (_stream == null || !IsConnected)
                 throw new InvalidOperationException("Chưa kết nối");
             const long MAX_FILE_SIZE = 10 * 1024 * 1024;
-            if (fileData.Length > 10 * 1024 * 1024)
+            if (fileData.Length > MAX_FILE_SIZE)
             {
                 OnError?.Invoke("Kích thước file vượt quá 10MB, vui lòng chọn file nhỏ hơn.");
                 return;
@@ -209,6 +212,7 @@ namespace P2PChatApp
         public void Stop()
         {
             _cts?.Cancel();
+            _isListening = false;
             _listener?.Stop();
         }
     }

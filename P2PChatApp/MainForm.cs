@@ -16,15 +16,31 @@ namespace P2PChatApp
         private PeerDiscovery _peerDiscovery;
         private CancellationTokenSource? _discoveryCts;
         private Dictionary<string, IPEndPoint> _discoveredPeers = new Dictionary<string, IPEndPoint>();
-        private Dictionary<string, byte[]> _receivedFiles = new Dictionary<string, byte[]>();
+        private FlowLayoutPanel pnlReceivedFiles;
 
         public MainForm()
         {
             InitializeComponent();
+            InitializeFilePanel();
             _peerDiscovery = new PeerDiscovery();
             UpdateLocalIP();
-            rtbChat.MouseClick += RtbChat_MouseClick;
             UpdateStatus("Sẵn sàng", Color.Gray);
+            _peerNode = new PeerNode();
+        }
+
+        private void InitializeFilePanel()
+        {
+            pnlReceivedFiles = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Bottom,
+                AutoSize = true,
+                AutoScroll = true,
+                Height = 120,
+                Padding = new Padding(10),
+                FlowDirection = FlowDirection.TopDown,
+                WrapContents = false
+            };
+            Controls.Add(pnlReceivedFiles);
         }
 
         private void UpdateLocalIP()
@@ -75,7 +91,41 @@ namespace P2PChatApp
                     AppendChatMessage($"[{DateTime.Now:HH:mm:ss}] {displayName}: {msg}", Color.Green);
                 }));
 
-                _peerNode.FileReceived += OnFileReceivedFromPeer;
+                _peerNode.FileReceived += (fileName, data) =>
+                {
+                    Invoke((Action)(() =>
+                    {
+                        AppendChatMessage($"Nhận tệp: {fileName} ({FormatFileSize(data.Length)})", Color.Purple);
+                        var link = new LinkLabel
+                        {
+                            Text = $"Tải {fileName} ({FormatFileSize(data.Length)})",
+                            AutoSize = true,
+                            LinkColor = Color.Blue,
+                            Tag = (fileName, data)
+                        };
+
+                        link.LinkClicked += (s, e) =>
+                        {
+                            var (fname, bytes) = ((string, byte[]))((LinkLabel)s).Tag;
+                            using var saveDialog = new SaveFileDialog
+                            {
+                                FileName = fname,
+                                Filter = "All Files|*.*"
+                            };
+                            if (saveDialog.ShowDialog() == DialogResult.OK)
+                            {
+                                File.WriteAllBytes(saveDialog.FileName, bytes);
+                                MessageBox.Show($"Đã lưu tệp: {saveDialog.FileName}",
+                                                "Lưu thành công",
+                                                MessageBoxButtons.OK,
+                                                MessageBoxIcon.Information);
+                            }
+                        };
+
+                        pnlReceivedFiles.Controls.Add(link);
+                    }));
+                };
+
 
                 _peerNode.OnConnected += endpoint => Invoke((Action)(() =>
                 {
@@ -90,6 +140,9 @@ namespace P2PChatApp
                     btnConnect.Enabled = false;
                     btnDisconnect.Enabled = true;
                     txtUserName.Enabled = false;
+                    txtRemoteIP.Enabled = false;
+                    txtRemotePort.Enabled = false;
+                    btnStopServer.Enabled = false;
                 }));
 
                 _peerNode.OnDisconnected += () => Invoke((Action)(() =>
@@ -105,6 +158,9 @@ namespace P2PChatApp
                     btnConnect.Enabled = true;
                     btnDisconnect.Enabled = false;
                     txtUserName.Enabled = true;
+                    txtRemoteIP.Enabled = true;
+                    txtRemotePort.Enabled = true;
+                    btnStopServer.Enabled = true;
                 }));
 
                 _peerNode.OnError += message => Invoke((Action)(() => MessageBox.Show(message, "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error)));
@@ -149,7 +205,8 @@ namespace P2PChatApp
         {
             try
             {
-                btnStartServer_Click(null, null);
+                if (!_peerNode.IsListening)
+                    btnStartServer_Click(null, null);
 
                 if (!IPAddress.TryParse(txtRemoteIP.Text, out IPAddress? ipAddress))
                 {
@@ -212,12 +269,6 @@ namespace P2PChatApp
             try
             {
                 _peerNode?.Disconnect();
-                btnConnect.Enabled = true;
-                btnDisconnect.Enabled = false;
-                txtRemoteIP.Enabled = true;
-                txtRemotePort.Enabled = true;
-                txtUserName.Enabled = true;
-                EnableChatControls(false);
             }
             catch (Exception ex)
             {
@@ -336,61 +387,6 @@ namespace P2PChatApp
             catch (Exception ex)
             {
                 MessageBox.Show($"Lỗi: {ex.Message}", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-
-        private void OnFileReceivedFromPeer(string fileName, byte[] fileData)
-        {
-            Invoke((Action)(() =>
-            {
-                string fileKey = $"{fileName}_{DateTime.Now.Ticks}";
-                _receivedFiles[fileKey] = fileData;
-                string message = $"[{DateTime.Now:HH:mm:ss}] [DOWNLOAD:{fileKey}] Đã nhận file: {fileName} ({FormatFileSize(fileData.Length)}) - Click để tải về";
-                AppendChatMessage(message, Color.Green);
-                UpdateStatus($"Đã nhận file: {fileName}", Color.Green);
-            }));
-        }
-
-
-
-        private void RtbChat_MouseClick(object sender, MouseEventArgs e)
-        {
-            try
-            {
-                int index = rtbChat.GetCharIndexFromPosition(e.Location);
-                int lineIndex = rtbChat.GetLineFromCharIndex(index);
-                int lineStart = rtbChat.GetFirstCharIndexFromLine(lineIndex);
-                int lineEnd = lineIndex < rtbChat.Lines.Length - 1 ? rtbChat.GetFirstCharIndexFromLine(lineIndex + 1) : rtbChat.TextLength;
-                string line = rtbChat.Text.Substring(lineStart, lineEnd - lineStart);
-
-                if (line.Contains("[DOWNLOAD:"))
-                {
-                    int startIdx = line.IndexOf("[DOWNLOAD:") + 10;
-                    int endIdx = line.IndexOf("]", startIdx);
-                    if (endIdx > startIdx)
-                    {
-                        string fileKey = line.Substring(startIdx, endIdx - startIdx);
-                        if (_receivedFiles.ContainsKey(fileKey))
-                        {
-                            int fileNameStart = line.IndexOf("Đã nhận file: ") + 14;
-                            int fileNameEnd = line.IndexOf(" (", fileNameStart);
-                            string fileName = line.Substring(fileNameStart, fileNameEnd - fileNameStart);
-
-                            using var saveFileDialog = new SaveFileDialog { FileName = fileName, Filter = "All Files (*.*)|*.*" };
-                            if (saveFileDialog.ShowDialog() == DialogResult.OK)
-                            {
-                                File.WriteAllBytes(saveFileDialog.FileName, _receivedFiles[fileKey]);
-                                MessageBox.Show($"Đã lưu file: {saveFileDialog.FileName}", "Thành công", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                                UpdateStatus($"Đã lưu file: {fileName}", Color.Green);
-                                _receivedFiles.Remove(fileKey);
-                            }
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                UpdateStatus($"Lỗi: {ex.Message}", Color.Red);
             }
         }
 
