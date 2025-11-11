@@ -2,6 +2,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -9,6 +10,35 @@ namespace P2PChatApp
 {
     public class PeerNode
     {
+        private static async Task ReadExactAsync(NetworkStream s, byte[] buf, int off, int len, CancellationToken ct)
+        {
+            int readTotal = 0;
+            while (readTotal < len)
+            {
+                int r = await s.ReadAsync(buf, off + readTotal, len - readTotal, ct);
+                if (r == 0) throw new IOException("Socket closed");
+                readTotal += r;
+            }
+        }
+
+        private static async Task<int> ReadInt32Async(NetworkStream s, CancellationToken ct)
+        {
+            var b = new byte[4];
+            await ReadExactAsync(s, b, 0, 4, ct);
+            return BitConverter.ToInt32(b, 0);
+        }
+
+        private static async Task WriteInt32Async(NetworkStream s, int value, CancellationToken ct)
+        {
+            var b = BitConverter.GetBytes(value);
+            await s.WriteAsync(b, 0, 4, ct);
+        }
+
+        private static async Task WriteBytesAsync(NetworkStream s, byte[] data, CancellationToken ct)
+        {
+            await s.WriteAsync(data, 0, data.Length, ct);
+        }
+
         private TcpListener? _listener;
         private TcpClient? _client;
         private NetworkStream? _stream;
@@ -25,11 +55,6 @@ namespace P2PChatApp
         public bool IsConnected => _client?.Connected ?? false;
 
         public PeerNode(int port) => _port = port;
-        public PeerNode(){}
-        string Escape(string s) => s.Replace("\\", "\\\\").Replace("|", "\\|").Replace("\n", "\\n");
-        string Unescape(string s) => s.Replace("\\n", "\n").Replace("\\|", "|").Replace("\\\\", "\\");
-
-
         public async Task StartListeningAsync()
         {
             if (_isListening) return;
@@ -88,19 +113,62 @@ namespace P2PChatApp
 
             _ = Task.Run(async () => await ReceiveLoop());
         }
-
         private async Task ReceiveLoop()
         {
             try
             {
-                using var reader = new StreamReader(_stream!, Encoding.UTF8, leaveOpen: true);
-
-                while (_client?.Connected == true)
+                var s = _stream!;
+                var ct = _cts?.Token ?? CancellationToken.None;
+                while (_client?.Connected == true && !ct.IsCancellationRequested)
                 {
-                    string? line = await reader.ReadLineAsync();
-                    if (string.IsNullOrEmpty(line)) break;
+                    int totalLen = await ReadInt32Async(s, ct);
+                    var frame = new byte[totalLen];
+                    await ReadExactAsync(s, frame, 0, totalLen, ct);
 
-                    ProcessMessage(line);
+                    int i = 0;
+                    byte type = frame[i++];
+                    int ReadLen()
+                    {
+                        int v = BitConverter.ToInt32(frame, i);
+                        i += 4;
+                        return v;
+                    }
+                    string ReadString()
+                    {
+                        int L = ReadLen();
+                        var str = Encoding.UTF8.GetString(frame, i, L);
+                        i += L;
+                        return str;
+                    }
+                    byte[] ReadBytes()
+                    {
+                        int L = ReadLen();
+                        var b = new byte[L];
+                        Buffer.BlockCopy(frame, i, b, 0, L);
+                        i += L;
+                        return b;
+                    }
+
+                    switch (type)
+                    {
+                        case 1: // MSG
+                        {
+                            string username = ReadString();
+                            string message  = ReadString();
+                            MessageReceived?.Invoke(username, message);
+                            break;
+                        }
+                        case 2: // FILE
+                        {
+                            string filename = ReadString();
+                            byte[] data     = ReadBytes();
+                            FileReceived?.Invoke(filename, data);
+                            break;
+                        }
+                        default:
+                            OnError?.Invoke($"Unknown frame type: {type}");
+                            break;
+                    }
                 }
             }
             catch (Exception ex)
@@ -112,55 +180,21 @@ namespace P2PChatApp
                 Disconnect();
             }
         }
-
-        private void ProcessMessage(string packet)
+        public async Task SendMessageAsync(string username, string message, CancellationToken cancellationToken = default)
         {
+            if (_stream == null) throw new InvalidOperationException("Chưa kết nối");
+
+            var u = Encoding.UTF8.GetBytes(username ?? string.Empty);
+            var m = Encoding.UTF8.GetBytes(message ?? string.Empty);
+
+            int payloadLen = 1 + 4 + u.Length + 4 + m.Length;
             try
             {
-                var parts = packet.Split('|');
-                if (parts.Length < 2) return;
-
-                string type = parts[0];
-
-                switch (type)
-                {
-                    case "MSG":
-                        if (parts.Length >= 3)
-                        {
-                            string username = Unescape(parts[1]);
-                            string message = Unescape(parts[2]);
-                            MessageReceived?.Invoke(username, message);
-                        }
-                        break;
-
-                    case "FILE":
-                        if (parts.Length >= 3)
-                        {
-                            string filename = Unescape(parts[1]);
-                            byte[] fileData = Convert.FromBase64String(parts[2]);
-                            FileReceived?.Invoke(filename, fileData);
-                        }
-                        break;
-                }
-            }
-            catch (Exception ex)
-            {
-                OnError?.Invoke($"Lỗi xử lý message: {ex.Message}");
-            }
-        }
-
-        public async Task SendMessageAsync(string username, string message)
-        {
-            if (_stream == null || !IsConnected)
-                throw new InvalidOperationException("Chưa kết nối");
-
-            try
-            {
-                string packet = $"MSG|{Escape(username)}|{Escape(message)}\n";
-                byte[] data = Encoding.UTF8.GetBytes(packet);
-
-                await _stream.WriteAsync(data, 0, data.Length);
-                await _stream.FlushAsync();
+                await WriteInt32Async(_stream, payloadLen, cancellationToken);
+                await _stream.WriteAsync(new byte[] { 1 }, 0, 1, cancellationToken); // type=1 (MSG)
+                await WriteInt32Async(_stream, u.Length, cancellationToken); await WriteBytesAsync(_stream, u, cancellationToken);
+                await WriteInt32Async(_stream, m.Length, cancellationToken); await WriteBytesAsync(_stream, m, cancellationToken);
+                await _stream.FlushAsync(cancellationToken);
             }
             catch (Exception ex)
             {
@@ -169,26 +203,24 @@ namespace P2PChatApp
                 throw;
             }
         }
-
-        public async Task SendFileAsync(string fileName, byte[] fileData)
+        public async Task SendFileAsync(string fileName, byte[] fileData, CancellationToken cancellationToken = default)
         {
-            if (_stream == null || !IsConnected)
-                throw new InvalidOperationException("Chưa kết nối");
-            const long MAX_FILE_SIZE = 10 * 1024 * 1024;
-            if (fileData.Length > MAX_FILE_SIZE)
-            {
-                OnError?.Invoke("Kích thước file vượt quá 10MB, vui lòng chọn file nhỏ hơn.");
-                return;
-            }
+            if (_stream == null) throw new InvalidOperationException("Chưa kết nối");
+
+            var f = Encoding.UTF8.GetBytes(fileName ?? string.Empty);
+            int payloadLen = 1 + 4 + f.Length + 4 + (fileData?.Length ?? 0);
 
             try
             {
-                string base64Data = Convert.ToBase64String(fileData);
-                string packet = $"FILE|{Escape(fileName)}|{base64Data}\n";
-                byte[] data = Encoding.UTF8.GetBytes(packet);
+                await WriteInt32Async(_stream, payloadLen, cancellationToken);
+                await _stream.WriteAsync(new byte[] { 2 }, 0, 1, cancellationToken); // type=2 (FILE)
+                await WriteInt32Async(_stream, f.Length, cancellationToken);
+                await WriteBytesAsync(_stream, f, cancellationToken);
+                await WriteInt32Async(_stream, fileData?.Length ?? 0, cancellationToken);
+                if (fileData != null && fileData.Length > 0)
+                    await WriteBytesAsync(_stream, fileData, cancellationToken);
 
-                await _stream.WriteAsync(data, 0, data.Length);
-                await _stream.FlushAsync();
+                await _stream.FlushAsync(cancellationToken);
             }
             catch (Exception ex)
             {
@@ -197,7 +229,6 @@ namespace P2PChatApp
                 throw;
             }
         }
-
         public void Disconnect()
         {
             try
@@ -208,7 +239,6 @@ namespace P2PChatApp
             }
             catch { }
         }
-
         public void Stop()
         {
             _cts?.Cancel();

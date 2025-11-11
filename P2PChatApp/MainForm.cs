@@ -25,7 +25,6 @@ namespace P2PChatApp
             _peerDiscovery = new PeerDiscovery();
             UpdateLocalIP();
             UpdateStatus("Sẵn sàng", Color.Gray);
-            _peerNode = new PeerNode();
         }
 
         private void InitializeFilePanel()
@@ -205,7 +204,7 @@ namespace P2PChatApp
         {
             try
             {
-                if (!_peerNode.IsListening)
+                if (_peerNode == null || !_peerNode.IsListening)
                     btnStartServer_Click(null, null);
 
                 if (!IPAddress.TryParse(txtRemoteIP.Text, out IPAddress? ipAddress))
