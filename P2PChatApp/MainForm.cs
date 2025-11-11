@@ -162,8 +162,10 @@ namespace P2PChatApp
                     btnStopServer.Enabled = true;
                 }));
 
-                _peerNode.OnError += message => Invoke((Action)(() => MessageBox.Show(message, "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error)));
-
+                _peerNode.OnError += message =>
+                {
+                    Console.WriteLine("[LỖI] " + message);
+                };
 
                 Task.Run(async () => await _peerNode.StartListeningAsync());
 
