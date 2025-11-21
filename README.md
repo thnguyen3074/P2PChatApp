@@ -32,7 +32,6 @@ P2PChatApp/
 ├── MainForm.Designer.cs     # Designer cho giao diện
 ├── P2PNode.cs               # P2P Node (vừa server vừa client)
 ├── PeerDiscovery.cs         # UDP discovery
-├── FileTransfer.cs          # File transfer
 ├── Program.cs               # Entry point
 └── P2PChatApp.csproj       # Project file
 ```
@@ -41,7 +40,6 @@ P2PChatApp/
 
 ### 1. Khởi động ứng dụng
 ```bash
-cd "C:\Users\84355\source\repos\P2PChat\P2PChatApp"
 dotnet run
 ```
 
@@ -60,7 +58,6 @@ dotnet run
 - Node của bạn vừa là server (lắng nghe) vừa là client (kết nối)
 - Nhập IP và cổng của peer đích
 - Click **"Kết nối"** để thiết lập kết nối P2P
-- Có thể kết nối đến nhiều peer cùng lúc
 
 ### 5. Chat
 - Mở tab **"Chat"**
@@ -68,7 +65,7 @@ dotnet run
 
 ## Yêu cầu hệ thống
 
-- **.NET 8.0** hoặc cao hơn
+- **.NET 9.0**
 - **Windows** (Windows Forms)
 - **Mạng LAN** để discovery peer
 
