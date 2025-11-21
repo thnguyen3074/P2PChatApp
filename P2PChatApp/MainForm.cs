@@ -7,17 +7,15 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.IO;
-
 namespace P2PChatApp
 {
     public partial class MainForm : Form
     {
         private PeerNode? _peerNode;
-        private PeerDiscovery _peerDiscovery;
+        private readonly PeerDiscovery _peerDiscovery;
         private CancellationTokenSource? _discoveryCts;
-        private Dictionary<string, IPEndPoint> _discoveredPeers = new Dictionary<string, IPEndPoint>();
+        private readonly Dictionary<string, IPEndPoint> _discoveredPeers = new Dictionary<string, IPEndPoint>();
         private FlowLayoutPanel pnlReceivedFiles;
-
         public MainForm()
         {
             InitializeComponent();
@@ -25,8 +23,8 @@ namespace P2PChatApp
             _peerDiscovery = new PeerDiscovery();
             UpdateLocalIP();
             UpdateStatus("Sẵn sàng", Color.Gray);
+            EnableChatControls(false);
         }
-
         private void InitializeFilePanel()
         {
             pnlReceivedFiles = new FlowLayoutPanel
@@ -41,22 +39,19 @@ namespace P2PChatApp
             };
             Controls.Add(pnlReceivedFiles);
         }
-
         private void UpdateLocalIP()
         {
             try
             {
                 foreach (var ni in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
                 {
-                    if (ni.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up)
-                        continue;
+                    if (ni.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up) continue;
                     string name = ni.Name.ToLower();
-                    if (name.Contains("vmware") || name.Contains("virtual") || name.Contains("loopback"))
-                        continue;
+                    if (name.Contains("vmware") || name.Contains("virtual") || name.Contains("loopback")) continue;
                     var ipProps = ni.GetIPProperties();
                     foreach (var ip in ipProps.UnicastAddresses)
                     {
-                        if (ip.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                        if (ip.Address.AddressFamily == AddressFamily.InterNetwork)
                         {
                             txtLocalIP.Text = ip.Address.ToString();
                             return;
@@ -70,8 +65,67 @@ namespace P2PChatApp
                 txtLocalIP.Text = "127.0.0.1";
             }
         }
-
-
+        private void SetServerUI(bool running)
+        {
+            btnStartServer.Enabled = !running;
+            btnStopServer.Enabled = running;
+            txtLocalPort.Enabled = !running;
+        }
+        private void SetConnectedUI(bool connected)
+        {
+            EnableChatControls(connected);
+            btnConnect.Enabled = !connected;
+            btnDisconnect.Enabled = connected;
+            txtUserName.Enabled = !connected;
+            txtRemoteIP.Enabled = !connected;
+            txtRemotePort.Enabled = !connected;
+            btnStopServer.Enabled = !connected;
+        }
+        private void WirePeerNodeEvents(int port)
+        {
+            _peerNode!.MessageReceived += (username, msg) => Invoke((Action)(() =>
+            {
+                string displayName = string.IsNullOrWhiteSpace(username) ? "Peer" : username;
+                AppendChatMessage($"[{DateTime.Now:HH:mm:ss}] {displayName}: {msg}", Color.Green);
+            }));
+            _peerNode.FileReceived += (fileName, data) => Invoke((Action)(() =>
+            {
+                AppendChatMessage($"Nhận tệp: {fileName} ({FormatFileSize(data.Length)})", Color.Purple);
+                var link = new LinkLabel
+                {
+                    Text = $"Tải {fileName} ({FormatFileSize(data.Length)})",
+                    AutoSize = true,
+                    LinkColor = Color.Blue,
+                    Tag = (fileName, data)
+                };
+                link.LinkClicked += (s, e) =>
+                {
+                    var (fname, bytes) = ((string, byte[]))((LinkLabel)s).Tag;
+                    using var saveDialog = new SaveFileDialog { FileName = fname, Filter = "All Files|*.*" };
+                    if (saveDialog.ShowDialog() == DialogResult.OK)
+                    {
+                        File.WriteAllBytes(saveDialog.FileName, bytes);
+                        MessageBox.Show($"Đã lưu tệp: {saveDialog.FileName}", "Lưu thành công", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+                };
+                pnlReceivedFiles.Controls.Add(link);
+            }));
+            _peerNode.OnConnected += endpoint => Invoke((Action)(() =>
+            {
+                UpdateStatus($"Đã kết nối với {endpoint}", Color.Green);
+                MessageBox.Show($"Đã kết nối thành công với {endpoint}", "Kết nối thành công", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                SetConnectedUI(true);
+            }));
+            _peerNode.OnDisconnected += () => Invoke((Action)(() =>
+            {
+                UpdateStatus("Đã ngắt kết nối", Color.Orange);
+                MessageBox.Show("Kết nối đã bị ngắt!", "Ngắt kết nối", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                SetConnectedUI(false);
+            }));
+            _peerNode.OnError += message => Console.WriteLine("[LỖI] " + message);
+            _discoveryCts = new CancellationTokenSource();
+            Task.Run(async () => await _peerDiscovery.StartRespondingAsync(port, _discoveryCts.Token));
+        }
         private void btnStartServer_Click(object sender, EventArgs e)
         {
             try
@@ -81,100 +135,11 @@ namespace P2PChatApp
                     MessageBox.Show("Cổng không hợp lệ", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
-
+                if (_peerNode != null && _peerNode.IsListening) return;
                 _peerNode = new PeerNode(port);
-
-                _peerNode.MessageReceived += (username, msg) => Invoke((Action)(() =>
-                {
-                    string displayName = string.IsNullOrWhiteSpace(username) ? "Peer" : username;
-                    AppendChatMessage($"[{DateTime.Now:HH:mm:ss}] {displayName}: {msg}", Color.Green);
-                }));
-
-                _peerNode.FileReceived += (fileName, data) =>
-                {
-                    Invoke((Action)(() =>
-                    {
-                        AppendChatMessage($"Nhận tệp: {fileName} ({FormatFileSize(data.Length)})", Color.Purple);
-                        var link = new LinkLabel
-                        {
-                            Text = $"Tải {fileName} ({FormatFileSize(data.Length)})",
-                            AutoSize = true,
-                            LinkColor = Color.Blue,
-                            Tag = (fileName, data)
-                        };
-
-                        link.LinkClicked += (s, e) =>
-                        {
-                            var (fname, bytes) = ((string, byte[]))((LinkLabel)s).Tag;
-                            using var saveDialog = new SaveFileDialog
-                            {
-                                FileName = fname,
-                                Filter = "All Files|*.*"
-                            };
-                            if (saveDialog.ShowDialog() == DialogResult.OK)
-                            {
-                                File.WriteAllBytes(saveDialog.FileName, bytes);
-                                MessageBox.Show($"Đã lưu tệp: {saveDialog.FileName}",
-                                                "Lưu thành công",
-                                                MessageBoxButtons.OK,
-                                                MessageBoxIcon.Information);
-                            }
-                        };
-
-                        pnlReceivedFiles.Controls.Add(link);
-                    }));
-                };
-
-
-                _peerNode.OnConnected += endpoint => Invoke((Action)(() =>
-                {
-                    UpdateStatus($"Đã kết nối với {endpoint}", Color.Green);
-                    MessageBox.Show(
-                        $"Đã kết nối thành công với {endpoint}",
-                        "Kết nối thành công",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Information
-                    );
-                    EnableChatControls(true);
-                    btnConnect.Enabled = false;
-                    btnDisconnect.Enabled = true;
-                    txtUserName.Enabled = false;
-                    txtRemoteIP.Enabled = false;
-                    txtRemotePort.Enabled = false;
-                    btnStopServer.Enabled = false;
-                }));
-
-                _peerNode.OnDisconnected += () => Invoke((Action)(() =>
-                {
-                    UpdateStatus("Đã ngắt kết nối", Color.Orange);
-                    MessageBox.Show(
-                        "Kết nối đã bị ngắt!",
-                        "Ngắt kết nối",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Warning
-                    );
-                    EnableChatControls(false);
-                    btnConnect.Enabled = true;
-                    btnDisconnect.Enabled = false;
-                    txtUserName.Enabled = true;
-                    txtRemoteIP.Enabled = true;
-                    txtRemotePort.Enabled = true;
-                    btnStopServer.Enabled = true;
-                }));
-
-                _peerNode.OnError += message =>
-                {
-                    Console.WriteLine("[LỖI] " + message);
-                };
-
+                WirePeerNodeEvents(port);
                 Task.Run(async () => await _peerNode.StartListeningAsync());
-
-                _discoveryCts = new CancellationTokenSource();
-                Task.Run(async () => await _peerDiscovery.StartRespondingAsync(port, _discoveryCts.Token));
-
-                btnStartServer.Enabled = false;
-                btnStopServer.Enabled = true;
-                txtLocalPort.Enabled = false;
+                SetServerUI(true);
                 UpdateStatus($"Đang lắng nghe trên cổng {port}", Color.Blue);
             }
             catch (Exception ex)
@@ -182,17 +147,13 @@ namespace P2PChatApp
                 MessageBox.Show($"Lỗi: {ex.Message}", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
-
         private void btnStopServer_Click(object sender, EventArgs e)
         {
             try
             {
                 _peerNode?.Stop();
                 _discoveryCts?.Cancel();
-                btnStartServer.Enabled = true;
-                btnStopServer.Enabled = false;
-                txtLocalPort.Enabled = true;
-                txtUserName.Enabled = true;
+                SetServerUI(false);
                 EnableChatControls(false);
                 UpdateStatus("Đã dừng", Color.Gray);
             }
@@ -201,32 +162,26 @@ namespace P2PChatApp
                 MessageBox.Show($"Lỗi: {ex.Message}", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
-
         private async void btnConnect_Click(object sender, EventArgs e)
         {
             try
             {
-                if (_peerNode == null || !_peerNode.IsListening)
-                    btnStartServer_Click(null, null);
-
-                if (!IPAddress.TryParse(txtRemoteIP.Text, out IPAddress? ipAddress))
+                if (_peerNode == null || !_peerNode.IsListening) btnStartServer_Click(null, EventArgs.Empty);
+                if (!IPAddress.TryParse(txtRemoteIP.Text, out IPAddress ipAddress))
                 {
                     MessageBox.Show("Địa chỉ IP không hợp lệ", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
-
                 if (!int.TryParse(txtRemotePort.Text, out int port))
                 {
                     MessageBox.Show("Cổng không hợp lệ", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
-
                 if (_peerNode == null)
                 {
                     MessageBox.Show("Vui lòng khởi động Node trước", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }
-
                 int myPort = int.Parse(txtLocalPort.Text);
                 if (IsLocalIPAddress(ipAddress) && port == myPort)
                 {
@@ -238,33 +193,23 @@ namespace P2PChatApp
                 UpdateStatus($"Đang kết nối đến {endPoint}...", Color.Orange);
                 var connectTask = _peerNode.ConnectToPeerAsync(endPoint);
                 var timeoutTask = Task.Delay(TimeSpan.FromSeconds(20));
-
                 var completed = await Task.WhenAny(connectTask, timeoutTask);
-
                 if (completed == timeoutTask)
                 {
-                    MessageBox.Show("Kết nối thất bại: quá 20 giây mà không có phản hồi từ peer.",
-                                    "Timeout", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    MessageBox.Show("Kết nối thất bại: quá 20 giây mà không có phản hồi từ peer.", "Timeout", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     UpdateStatus("Kết nối thất bại (timeout)", Color.Red);
                     btnConnect.Enabled = true;
                     return;
                 }
                 await connectTask;
-                UpdateStatus($"Đã kết nối đến {endPoint}", Color.Green);
-
-                btnConnect.Enabled = false;
-                btnDisconnect.Enabled = true;
-                txtRemoteIP.Enabled = false;
-                txtRemotePort.Enabled = false;
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Lỗi kết nối: {ex.Message}", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                UpdateStatus($"Kết nối thất bại", Color.Red);
+                UpdateStatus("Kết nối thất bại", Color.Red);
                 btnConnect.Enabled = true;
             }
         }
-
         private void btnDisconnect_Click(object sender, EventArgs e)
         {
             try
@@ -276,7 +221,6 @@ namespace P2PChatApp
                 MessageBox.Show($"Lỗi: {ex.Message}", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
-
         private async void btnDiscoverPeers_Click(object sender, EventArgs e)
         {
             try
@@ -286,58 +230,49 @@ namespace P2PChatApp
                 btnDiscoverPeers.Enabled = false;
                 btnDiscoverPeers.Text = "Đang tìm kiếm...";
                 UpdateStatus("Đang tìm kiếm peers...", Color.Blue);
-
                 int port = int.TryParse(txtLocalPort.Text, out int p) ? p : 8080;
                 var peers = await _peerDiscovery.DiscoverAsync(port, TimeSpan.FromSeconds(3));
-
                 foreach (var peer in peers)
                 {
                     string displayText = $"{peer.Address}:{peer.Port}";
-                    if (!_discoveredPeers.ContainsKey(displayText))
-                    {
-                        _discoveredPeers[displayText] = peer;
-                        lstPeers.Items.Add(displayText);
-                    }
+                    if (_discoveredPeers.ContainsKey(displayText)) continue;
+                    _discoveredPeers[displayText] = peer;
+                    lstPeers.Items.Add(displayText);
                 }
-
                 UpdateStatus($"Tìm thấy {peers.Count} peer(s)", Color.Green);
-                btnDiscoverPeers.Enabled = true;
-                btnDiscoverPeers.Text = "Tìm kiếm Peers";
             }
             catch (Exception ex)
             {
                 UpdateStatus($"Lỗi: {ex.Message}", Color.Red);
+            }
+            finally
+            {
                 btnDiscoverPeers.Enabled = true;
                 btnDiscoverPeers.Text = "Tìm kiếm Peers";
             }
         }
-
         private void lstPeers_SelectedIndexChanged(object sender, EventArgs e)
         {
-            if (lstPeers.SelectedItem != null && _discoveredPeers.TryGetValue(lstPeers.SelectedItem.ToString()!, out IPEndPoint? peer))
+            if (lstPeers.SelectedItem == null) return;
+            if (_discoveredPeers.TryGetValue(lstPeers.SelectedItem.ToString()!, out IPEndPoint peer))
             {
                 txtRemoteIP.Text = peer.Address.ToString();
                 txtRemotePort.Text = peer.Port.ToString();
             }
         }
-
         private async void btnSendMessage_Click(object sender, EventArgs e)
         {
             try
             {
                 string message = txtMessage.Text.Trim();
                 if (string.IsNullOrEmpty(message)) return;
-
                 if (_peerNode == null || !_peerNode.IsConnected)
                 {
                     MessageBox.Show("Chưa kết nối đến peer", "Cảnh báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }
-
                 string userName = string.IsNullOrWhiteSpace(txtUserName.Text) ? "Peer" : txtUserName.Text.Trim();
-
                 await _peerNode.SendMessageAsync(userName, message);
-
                 AppendChatMessage($"[{DateTime.Now:HH:mm:ss}] Bạn: {message}", Color.Blue);
                 txtMessage.Clear();
             }
@@ -346,17 +281,13 @@ namespace P2PChatApp
                 MessageBox.Show($"Lỗi: {ex.Message}", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
-
         private void txtMessage_KeyPress(object sender, KeyPressEventArgs e)
         {
-            if (e.KeyChar == (char)Keys.Enter)
-            {
-                btnSendMessage_Click(sender, e);
-                e.Handled = true;
-            }
+            if (e.KeyChar != (char)Keys.Enter) return;
+            btnSendMessage_Click(sender, e);
+            e.Handled = true;
         }
-
-        private void btnSelectAndSendFile_Click(object sender, EventArgs e)
+        private async void btnSelectAndSendFile_Click(object sender, EventArgs e)
         {
             try
             {
@@ -365,32 +296,20 @@ namespace P2PChatApp
                     MessageBox.Show("Chưa kết nối đến peer", "Cảnh báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }
-
                 using var openFileDialog = new OpenFileDialog { Filter = "All Files (*.*)|*.*" };
-                if (openFileDialog.ShowDialog() == DialogResult.OK)
-                {
-                    string fileName = Path.GetFileName(openFileDialog.FileName);
-                    byte[] fileData = File.ReadAllBytes(openFileDialog.FileName);
-
-                    UpdateStatus($"Đang gửi file: {fileName}...", Color.Blue);
-
-                    Task.Run(async () =>
-                    {
-                        await _peerNode.SendFileAsync(fileName, fileData);
-                        Invoke((Action)(() =>
-                        {
-                            AppendChatMessage($"[{DateTime.Now:HH:mm:ss}] Bạn đã gửi file: {fileName} ({FormatFileSize(fileData.Length)})", Color.Blue);
-                            UpdateStatus($"Đã gửi file: {fileName}", Color.Green);
-                        }));
-                    });
-                }
+                if (openFileDialog.ShowDialog() != DialogResult.OK) return;
+                string fileName = Path.GetFileName(openFileDialog.FileName);
+                byte[] fileData = File.ReadAllBytes(openFileDialog.FileName);
+                UpdateStatus($"Đang gửi file: {fileName}...", Color.Blue);
+                await _peerNode.SendFileAsync(fileName, fileData);
+                AppendChatMessage($"[{DateTime.Now:HH:mm:ss}] Bạn đã gửi file: {fileName} ({FormatFileSize(fileData.Length)})", Color.Blue);
+                UpdateStatus($"Đã gửi file: {fileName}", Color.Green);
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Lỗi: {ex.Message}", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
-
         private string FormatFileSize(long bytes)
         {
             string[] sizes = { "B", "KB", "MB", "GB" };
@@ -403,7 +322,6 @@ namespace P2PChatApp
             }
             return $"{len:0.##} {sizes[order]}";
         }
-
         private void AppendChatMessage(string message, Color color)
         {
             rtbChat.SelectionStart = rtbChat.TextLength;
@@ -413,7 +331,6 @@ namespace P2PChatApp
             rtbChat.SelectionColor = rtbChat.ForeColor;
             rtbChat.ScrollToCaret();
         }
-
         private void UpdateStatus(string status, Color color)
         {
             if (InvokeRequired)
@@ -424,7 +341,6 @@ namespace P2PChatApp
             lblStatus.Text = status;
             lblStatus.ForeColor = color;
         }
-
         private void EnableChatControls(bool enabled)
         {
             if (InvokeRequired)
@@ -436,24 +352,22 @@ namespace P2PChatApp
             btnSendMessage.Enabled = enabled;
             btnAttachFile.Enabled = enabled;
         }
-
         private bool IsLocalIPAddress(IPAddress ipAddress)
         {
             try
             {
                 if (IPAddress.IsLoopback(ipAddress)) return true;
-
                 var host = Dns.GetHostEntry(Dns.GetHostName());
                 foreach (var ip in host.AddressList)
                 {
-                    if (ip.AddressFamily == AddressFamily.InterNetwork && ip.Equals(ipAddress))
-                        return true;
+                    if (ip.AddressFamily == AddressFamily.InterNetwork && ip.Equals(ipAddress)) return true;
                 }
             }
-            catch { }
+            catch
+            {
+            }
             return false;
         }
-
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             try
@@ -462,7 +376,9 @@ namespace P2PChatApp
                 _discoveryCts?.Cancel();
                 _peerDiscovery?.Dispose();
             }
-            catch { }
+            catch
+            {
+            }
             base.OnFormClosing(e);
         }
     }
